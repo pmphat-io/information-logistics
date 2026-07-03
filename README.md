@@ -22,11 +22,19 @@ Luu y:
 
 ## Chay local
 
-Tao `.env.local` theo env du an, sau do:
+Tao `.env.local` tu `.env.example`, sau do sua:
+
+```env
+DATABASE_URL="mysql://root:password@127.0.0.1:3306/information_logistics"
+ADMIN_PASSWORD=change-me
+```
+
+Sau do chay:
 
 ```bash
 cmd /c npm install
 cmd /c npx prisma generate
+cmd /c npx prisma db push
 cmd /c npm run dev
 ```
 
@@ -48,8 +56,8 @@ cmd /c npm run build
 Bat dau tu:
 
 1. [doc/README.md](D:/Information-logistics/doc/README.md:1)
-2. [doc/backend_handoff.md](D:/Information-logistics/doc/backend_handoff.md:1)
-3. [doc/execution-roadmap.md](D:/Information-logistics/doc/execution-roadmap.md:1)
+2. [doc/source-handoff.md](D:/Information-logistics/doc/source-handoff.md:1)
+3. [doc/deployment-guide.md](D:/Information-logistics/doc/deployment-guide.md:1)
 4. [doc/development-playbook.md](D:/Information-logistics/doc/development-playbook.md:1)
 
 ## Thu tu phat trien tiep theo

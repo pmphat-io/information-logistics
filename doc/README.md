@@ -1,119 +1,32 @@
-# Documentation Index - Information Logistics
+# Tai lieu du an
 
-Thu muc `doc` chua bo tai lieu phuc vu cho:
+Bat dau tu 3 file sau:
 
-- team design
-- team frontend
-- team backend
-- nguoi tiep quan project ve sau
+1. `doc/source-handoff.md`
+2. `doc/deployment-guide.md`
+3. `doc/development-playbook.md`
 
-## Danh sach tai lieu
+## Muc dich tung tai lieu
 
-### 1. UI Mockup Spec
+- `source-handoff.md`
+  tong quan ung dung, module hien co, trang thai source, cac luong nghiep vu da lam va cac diem can luu y khi phat trien tiep
 
-File:
+- `deployment-guide.md`
+  huong dan dong goi source, chuyen source sang may khac, cai dat moi truong, khoi tao database va chay local / production
 
-- [ui-mockup-spec.md](D:/Information-logistics/doc/ui-mockup-spec.md:1)
+- `development-playbook.md`
+  playbook phat trien tiep theo roadmap va cac quy uoc ky thuat da duoc xac lap tu truoc
 
-Muc dich:
+## Tai lieu bo sung
 
-- dac ta chi tiet bai toan UI/UX
-- mo ta luong nghiep vu, quy tac du lieu, va cac man hinh can mockup
+- `backend_handoff.md`
+  note handoff backend cu va cac quyet dinh trong qua trinh lam
 
-Nen doc khi:
+- `dev-handoff-status.md`
+  ghi chu trang thai va cac dau viec da tung duoc note
 
-- can thiet ke lai giao dien
-- can hieu ro bai toan nghiep vu tu goc nhin UX
+- `execution-roadmap.md`
+  roadmap tong the va backlog muc lon
 
-### 2. Designer Brief
-
-File:
-
-- [designer-brief.md](D:/Information-logistics/doc/designer-brief.md:1)
-
-Muc dich:
-
-- ban brief ngan gon de gui truc tiep cho designer
-- tom tat yeu cau, scope, state can mockup, va huong visual
-
-Nen doc khi:
-
-- can giao viec nhanh cho team design
-
-### 3. Dev Handoff Status
-
-File:
-
-- [dev-handoff-status.md](D:/Information-logistics/doc/dev-handoff-status.md:1)
-
-Muc dich:
-
-- ghi lai trang thai hien tai cua project theo moc roadmap hien tai
-- huong dan dev moi tiep quan nhanh
-- tom tat nhung phan da on dinh va nhung phan dang do
-
-Nen doc khi:
-
-- can tiep tuc phat trien project
-- can hieu codebase dang o muc nao
-
-### 4. Execution Roadmap
-
-File:
-
-- [execution-roadmap.md](D:/Information-logistics/doc/execution-roadmap.md:1)
-
-Muc dich:
-
-- chuyen thu tu uu tien thanh roadmap thuc thi theo phase va theo tuan
-- xac dinh definition of done cho tung chang
-
-Nen doc khi:
-
-- can biet nen lam gi truoc, gi sau
-- can lap ke hoach giao viec va theo doi tien do
-
-### 5. Development Playbook
-
-File:
-
-- [development-playbook.md](D:/Information-logistics/doc/development-playbook.md:1)
-
-Muc dich:
-
-- so tay tiep quan va phat trien tiep
-- ghi ro quy tac lam viec, thu tu doc code, checklist truoc khi merge
-
-Nen doc khi:
-
-- co dev moi vao
-- can tiep tuc cong viec dang do
-- can biet nhung gi khong nen doi som
-
-## Thu tu doc de xuat
-
-### Neu ban la designer
-
-1. [designer-brief.md](D:/Information-logistics/doc/designer-brief.md:1)
-2. [ui-mockup-spec.md](D:/Information-logistics/doc/ui-mockup-spec.md:1)
-3. [execution-roadmap.md](D:/Information-logistics/doc/execution-roadmap.md:1)
-
-### Neu ban la frontend dev
-
-1. [dev-handoff-status.md](D:/Information-logistics/doc/dev-handoff-status.md:1)
-2. [development-playbook.md](D:/Information-logistics/doc/development-playbook.md:1)
-3. [ui-mockup-spec.md](D:/Information-logistics/doc/ui-mockup-spec.md:1)
-4. [execution-roadmap.md](D:/Information-logistics/doc/execution-roadmap.md:1)
-
-### Neu ban la backend dev
-
-1. [dev-handoff-status.md](D:/Information-logistics/doc/dev-handoff-status.md:1)
-2. [backend_handoff.md](D:/Information-logistics/doc/backend_handoff.md:1)
-3. [development-playbook.md](D:/Information-logistics/doc/development-playbook.md:1)
-4. [execution-roadmap.md](D:/Information-logistics/doc/execution-roadmap.md:1)
-
-## Ghi chu
-
-Neu can overview nhanh ve project truoc khi doc tai lieu trong thu muc nay, xem them:
-
-- [README.md](D:/Information-logistics/README.md:1)
+- `designer-brief.md`
+  tom tat nhu cau cho phia design / giao dien
