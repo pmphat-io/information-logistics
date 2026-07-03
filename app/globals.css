@@ -427,7 +427,7 @@ a {
 
 /* SEARCH INPUT UI REDESIGN */
 .search-input-wrapper {
-  max-width: 900px;
+  max-width: 1120px;
   margin: 40px auto;
   text-align: center;
 }
@@ -459,7 +459,7 @@ a {
   border: 2px solid transparent;
   background-clip: padding-box;
   box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.1), 0 8px 10px -6px rgba(99, 102, 241, 0.1);
-  padding: 16px;
+  padding: 18px 20px;
 }
 
 .search-input-container::before {
@@ -491,7 +491,7 @@ a {
 
 .search-input-textarea {
   width: 100%;
-  min-height: 200px;
+  min-height: 240px;
   border: none;
   resize: none;
   font-family: inherit;
@@ -513,8 +513,17 @@ a {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
   margin-top: 16px;
   padding: 0 8px;
+}
+
+.search-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .attachment-btn {

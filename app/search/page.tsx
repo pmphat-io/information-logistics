@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useState, useTransition } from "react";
+import { useDeferredValue, useEffect, useRef, useState, useTransition, type ChangeEvent } from "react";
 import {
   AlertCircle,
   CheckCircle,
@@ -56,6 +56,67 @@ type MappedRow = {
   selectedSourceId: string;
   quantity: number;
   selected: boolean;
+  makerBrandType?: "maker" | "brand";
+  useManualEntry?: boolean;
+  manualEntry?: {
+    productName: string;
+    hsCode: string;
+    origin: string;
+    brand: string;
+    unit: string;
+    unitWeightKg: number;
+    description: string;
+    dimensions: string;
+    notes: string;
+  };
+};
+
+type LookupImportRow = {
+  rowNo: number;
+  name: string;
+  requestedQuantity?: number | null;
+  notes?: string;
+};
+
+type SearchResultColumnKey =
+  | "source"
+  | "hsCode"
+  | "origin"
+  | "brand"
+  | "quantity"
+  | "unit"
+  | "unitWeight"
+  | "totalWeight"
+  | "description"
+  | "dimensions"
+  | "notes";
+
+const searchResultColumnOptions: Array<{ key: SearchResultColumnKey; label: string }> = [
+  { key: "source", label: "Nguồn dữ liệu" },
+  { key: "hsCode", label: "HS Code" },
+  { key: "origin", label: "Xuất xứ" },
+  { key: "brand", label: "Maker/Brand" },
+  { key: "quantity", label: "Số lượng" },
+  { key: "unit", label: "Đơn vị tính" },
+  { key: "unitWeight", label: "N.W / ĐV (KG)" },
+  { key: "totalWeight", label: "Trọng lượng N.W (KG)" },
+  { key: "description", label: "Mô tả" },
+  { key: "dimensions", label: "Kích thước" },
+  { key: "notes", label: "Ghi chú" }
+];
+
+const defaultVisibleSearchColumns: Record<SearchResultColumnKey, boolean> = {
+  source: true,
+  hsCode: true,
+  origin: true,
+  brand: true,
+  quantity: true,
+  unit: true,
+  unitWeight: true,
+  totalWeight: true,
+  description: false,
+  dimensions: false,
+  notes: false
 };
 
 const emptyHeader: ExportHeader = {
@@ -182,6 +243,63 @@ function getSourceDisplayLabel(source: ProductSource) {
     : `Packing List${source.referenceCode ? ` • Số PK ${source.referenceCode}` : ""}`;
 }
 
+function createEmptyManualEntry(productName: string) {
+  return {
+    productName,
+    hsCode: "",
+    origin: "",
+    brand: "",
+    unit: "",
+    unitWeightKg: 0,
+    description: "",
+    dimensions: "",
+    notes: ""
+  };
+}
+
+function getSourceShortLabel(source: ProductSource) {
+  return source.type === "manual" ? "Thông tin cơ sở" : `Số PK ${source.referenceCode || "-"}`;
+}
+
+function getSourceDeclaredAtLabel(source: ProductSource) {
+  return String(source.declaredAt ?? "").trim();
+}
+
+function getSourceTooltipLabel(source: ProductSource) {
+  if (source.type === "manual") {
+    return "Thông tin cơ sở";
+  }
+
+  const parts = [
+    getSourceCustomerName(source) || "Khách hàng chưa có",
+    `Số PK ${source.referenceCode || "-"}`,
+    getSourceDeclaredAtLabel(source) || "Chưa có ngày"
+  ];
+
+  return parts.join(" • ");
+}
+
+function getSourceOptionLabel(source: ProductSource) {
+  if (source.type === "manual") {
+    return "Thông tin cơ sở";
+  }
+
+  const customerName = getSourceCustomerName(source) || "Khách hàng chưa có";
+  const declaredAt = getSourceDeclaredAtLabel(source);
+  return `Số PK ${source.referenceCode || "-"} - ${customerName}${declaredAt ? ` - ${declaredAt}` : ""}`;
+}
+
+function getSearchSelectableSources(sources: ProductSource[]) {
+  const declarationSources = sortDeclarationSources(
+    sources.filter((source) => source.type !== "manual")
+  );
+  const manualSources = sources
+    .filter((source) => source.type === "manual")
+    .sort((left, right) => getSourcePriority(right) - getSourcePriority(left));
+
+  return [...declarationSources, ...manualSources];
+}
+
 function getSourcePriority(source: ProductSource) {
   let score = source.type === "manual" ? 6 : 0;
   if (source.unit) score += 3;
@@ -195,8 +313,40 @@ function getSourcePriority(source: ProductSource) {
   return score;
 }
 
-function pickDefaultSourceId(sources: ProductSource[]) {
+function pickDefaultSourceId(sources: ProductSource[], preferLatestDeclaration = false) {
+  if (preferLatestDeclaration) {
+    const latestDeclaration = sortDeclarationSources(
+      sources.filter((source) => source.type !== "manual")
+    )[0];
+    if (latestDeclaration) {
+      return latestDeclaration.id;
+    }
+  }
+
   return [...sources].sort((a, b) => getSourcePriority(b) - getSourcePriority(a))[0]?.id ?? "";
+}
+
+function parseRequestedQuantityValue(value: string | number | null | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  }
+
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function parseLookupInputLine(line: string) {
+  const segments = line.split("||");
+  const name = String(segments[0] ?? "").trim();
+  const quantity = parseRequestedQuantityValue(segments[1]);
+
+  return {
+    name,
+    quantity
+  };
 }
 
 export default function SearchPage() {
@@ -216,6 +366,8 @@ export default function SearchPage() {
   const [hoveredCandId, setHoveredCandId] = useState<string | null>(null);
   const [hoveredResolveCandId, setHoveredResolveCandId] = useState<string | null>(null);
   const [showExportForm, setShowExportForm] = useState(false);
+  const [visibleSearchColumns, setVisibleSearchColumns] = useState<Record<SearchResultColumnKey, boolean>>(defaultVisibleSearchColumns);
+  const lookupFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!showProductPicker) return;
@@ -248,7 +400,10 @@ export default function SearchPage() {
           selectedProduct: srcPayload,
           selectedSourceId: resolvedSourceId,
           quantity: 1,
-          selected: true
+          selected: true,
+          makerBrandType: "maker",
+          useManualEntry: false,
+          manualEntry: createEmptyManualEntry(product.name)
         }
       ]);
       setMessage(`Đã thêm ${product.name}`);
@@ -258,29 +413,82 @@ export default function SearchPage() {
   }
 
   async function analyzeInput() {
-    const lines = inputText.split("\n").map((line) => line.trim()).filter(Boolean);
-    if (!lines.length) return;
+    const entries = inputText
+      .split("\n")
+      .map((line) => parseLookupInputLine(line.trim()))
+      .filter((entry) => entry.name);
+    if (!entries.length) return;
+
+    await analyzeLookupEntries(entries);
+  }
+
+  async function analyzeLookupEntries(entries: Array<{ name: string; quantity: number }>) {
+    if (!entries.length) return;
 
     setViewMode("results");
     setMessage("");
     setError("");
 
-    const initialRows: MappedRow[] = lines.map((line, idx) => ({
+    const initialRows: MappedRow[] = entries.map((entry, idx) => ({
       id: `row-${Date.now()}-${idx}`,
       index: idx + 1,
-      originalText: line,
+      originalText: entry.name,
       status: "pending",
       candidates: [],
       selectedProduct: null,
       selectedSourceId: "",
-      quantity: 1,
-      selected: true
+      quantity: entry.quantity,
+      selected: true,
+      makerBrandType: "maker",
+      useManualEntry: false,
+      manualEntry: createEmptyManualEntry(entry.name)
     }));
 
     setMappedRows(initialRows);
 
     for (const row of initialRows) {
       void processAutoSearch(row);
+    }
+  }
+
+  async function handleLookupFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setError("");
+    setMessage("");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/imports/lookup-list", {
+        method: "POST",
+        body: formData
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error || "Không thể đọc file import.");
+      }
+
+      const rows = Array.isArray(payload?.rows) ? (payload.rows as LookupImportRow[]) : [];
+      const entries = rows
+        .map((row) => ({
+          name: String(row.name ?? "").trim(),
+          quantity: parseRequestedQuantityValue(row.requestedQuantity)
+        }))
+        .filter((entry) => entry.name);
+
+      if (!entries.length) {
+        throw new Error("File import chưa có dòng dữ liệu hợp lệ.");
+      }
+
+      await analyzeLookupEntries(entries);
+      setMessage(`Đã nạp ${entries.length} dòng từ file Excel.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Không thể import file Excel.");
     }
   }
 
@@ -304,17 +512,20 @@ export default function SearchPage() {
       let selectedProduct: ProductSourcesPayload | null = null;
       let selectedSourceId = "";
 
+      const autoCandidate =
+        exactCandidate ||
+        (payload.items.length === 1 && (payload.items[0]?.matchScore ?? 0) >= 92 ? payload.items[0] : null);
+      const preferLatestDeclaration =
+        Boolean(exactCandidate) || (autoCandidate?.matchScore ?? 0) >= 100;
+
       if (payload.items.length === 0) {
         nextStatus = "not-found";
-      } else if (
-        exactCandidate ||
-        (payload.items.length === 1 && (payload.items[0]?.matchScore ?? 0) >= 92)
-      ) {
-        const productId = (exactCandidate ?? payload.items[0]).id;
+      } else if (autoCandidate) {
+        const productId = autoCandidate.id;
         const srcRes = await fetch(`/api/products/${productId}/sources`);
         if (srcRes.ok) {
           selectedProduct = (await srcRes.json()) as ProductSourcesPayload;
-          selectedSourceId = pickDefaultSourceId(selectedProduct.sources);
+          selectedSourceId = pickDefaultSourceId(selectedProduct.sources, preferLatestDeclaration);
           nextStatus = "matched";
         }
       }
@@ -346,6 +557,14 @@ export default function SearchPage() {
     setMappedRows((prev) => prev.map((row) => ({ ...row, selected: !allSelected })));
   }
 
+  function selectAllRows() {
+    setMappedRows((prev) => prev.map((row) => ({ ...row, selected: true })));
+  }
+
+  function clearRowSelection() {
+    setMappedRows((prev) => prev.map((row) => ({ ...row, selected: false })));
+  }
+
   function updateRowQuantity(rowId: string, quantity: number) {
     setMappedRows((prev) =>
       prev.map((row) => (row.id === rowId ? { ...row, quantity: quantity < 1 ? 1 : quantity } : row))
@@ -354,6 +573,126 @@ export default function SearchPage() {
 
   function removeRow(rowId: string) {
     setMappedRows((prev) => prev.filter((row) => row.id !== rowId).map((row, idx) => ({ ...row, index: idx + 1 })));
+  }
+
+  function removeSelectedRows() {
+    setMappedRows((prev) => prev.filter((row) => !row.selected).map((row, idx) => ({ ...row, index: idx + 1 })));
+  }
+
+  function toggleSearchColumn(column: SearchResultColumnKey) {
+    setVisibleSearchColumns((prev) => ({ ...prev, [column]: !prev[column] }));
+  }
+
+  function enableManualEntry(rowId: string) {
+    setMappedRows((prev) =>
+      prev.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              useManualEntry: true,
+              manualEntry: row.manualEntry ?? createEmptyManualEntry(row.originalText)
+            }
+          : row
+      )
+    );
+  }
+
+  function disableManualEntry(rowId: string) {
+    setMappedRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, useManualEntry: false } : row)));
+  }
+
+  function updateManualEntryField(
+    rowId: string,
+    field: "productName" | "hsCode" | "origin" | "brand" | "unit" | "unitWeightKg" | "description" | "dimensions" | "notes",
+    value: string
+  ) {
+    setMappedRows((prev) =>
+      prev.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              useManualEntry: true,
+              manualEntry: {
+                ...(row.manualEntry ?? createEmptyManualEntry(row.originalText)),
+                [field]: field === "unitWeightKg" ? (Number(value.replace(",", ".")) || 0) : value
+              }
+            }
+          : row
+      )
+    );
+  }
+
+  function addManualRowFromPicker() {
+    const name = productPickerQuery.trim() || "Hàng hóa nhập tay";
+    setMappedRows((prev) => [
+      ...prev,
+      {
+        id: `row-manual-${Date.now()}`,
+        index: prev.length + 1,
+        originalText: name,
+        status: "not-found",
+        candidates: [],
+        selectedProduct: null,
+        selectedSourceId: "",
+        quantity: 1,
+        selected: true,
+        makerBrandType: "maker",
+        useManualEntry: true,
+        manualEntry: createEmptyManualEntry(name)
+      }
+    ]);
+    setShowProductPicker(false);
+    setProductPickerQuery("");
+  }
+
+  function buildPackingOrderLine(row: MappedRow): PackingOrderLine | null {
+    if (row.useManualEntry) {
+      const manual = row.manualEntry ?? createEmptyManualEntry(row.originalText);
+      return {
+        id: `manual-${Date.now()}-${row.id}`,
+        productName: manual.productName || row.originalText,
+        contractOrPo: "",
+        origin: manual.origin,
+        brand: manual.brand,
+        quantity: row.quantity,
+        unit: manual.unit,
+        unitWeightKg: manual.unitWeightKg,
+        totalWeightKg: Number((manual.unitWeightKg * row.quantity).toFixed(6)),
+        hsCode: manual.hsCode,
+        sourceLabel: "Yêu cầu gốc / Nhập tay",
+        notes: manual.notes
+      };
+    }
+
+    if (row.status !== "matched" || !row.selectedProduct) {
+      return null;
+    }
+
+    const source = row.selectedProduct.sources.find((item) => item.id === row.selectedSourceId);
+    if (!source) {
+      return null;
+    }
+
+    return {
+      id: `${row.selectedProduct.id}-${source.id}-${Date.now()}-${row.id}`,
+      productName: row.selectedProduct.name,
+      contractOrPo: row.selectedProduct.contractOrPo,
+      origin: source.origin,
+      brand: source.brand,
+      quantity: row.quantity,
+      unit: source.unit || "",
+      unitWeightKg: source.unitWeightKg,
+      totalWeightKg: Number((source.unitWeightKg * row.quantity).toFixed(6)),
+      hsCode: source.hsCode || "",
+      sourceLabel: source.type === "manual" ? `Cơ sở ${source.referenceCode}` : `Số PK ${source.referenceCode}`,
+      notes: source.notes
+    };
+  }
+
+  function updateMakerBrandType(rowId: string, makerBrandType: "maker" | "brand") {
+    setMappedRows((prev) =>
+      prev.map((row) => (row.id === rowId ? { ...row, makerBrandType } : row))
+    );
   }
 
   async function selectCandidateForResolvingRow(candidateId: string, sourceId: string) {
@@ -383,29 +722,14 @@ export default function SearchPage() {
   }
 
   async function saveOrder() {
-    const activeRows = mappedRows.filter((row) => row.selected && row.status === "matched" && row.selectedProduct);
-    if (!activeRows.length) {
-      setError("Không có dòng nào hợp lệ (đã khớp) để lưu.");
+    const lines = mappedRows
+      .filter((row) => row.selected)
+      .map(buildPackingOrderLine)
+      .filter((line): line is PackingOrderLine => Boolean(line));
+    if (!lines.length) {
+      setError("Không có dòng nào hợp lệ để lưu.");
       return;
     }
-
-    const lines: PackingOrderLine[] = activeRows.map((row) => {
-      const source = row.selectedProduct!.sources.find((item) => item.id === row.selectedSourceId)!;
-      return {
-        id: `${row.selectedProduct!.id}-${source.id}-${Date.now()}-${row.id}`,
-        productName: row.selectedProduct!.name,
-        contractOrPo: row.selectedProduct!.contractOrPo,
-        origin: source.origin,
-        brand: source.brand,
-        quantity: row.quantity,
-        unit: source.unit || "",
-        unitWeightKg: source.unitWeightKg,
-        totalWeightKg: Number((source.unitWeightKg * row.quantity).toFixed(6)),
-        hsCode: source.hsCode || "",
-        sourceLabel: source.type === "manual" ? `Cơ sở ${source.referenceCode}` : `Số PK ${source.referenceCode}`,
-        notes: source.notes
-      };
-    });
 
     const response = await fetch(activeDraftId ? `/api/packing-orders/${activeDraftId}` : "/api/packing-orders", {
       method: activeDraftId ? "PUT" : "POST",
@@ -425,29 +749,14 @@ export default function SearchPage() {
   }
 
   async function exportDraft() {
-    const activeRows = mappedRows.filter((row) => row.selected && row.status === "matched" && row.selectedProduct);
-    if (!activeRows.length) {
-      setError("Không có dòng nào hợp lệ (đã khớp) để xuất Excel.");
+    const lines = mappedRows
+      .filter((row) => row.selected)
+      .map(buildPackingOrderLine)
+      .filter((line): line is PackingOrderLine => Boolean(line));
+    if (!lines.length) {
+      setError("Không có dòng nào hợp lệ để xuất Excel.");
       return;
     }
-
-    const lines: PackingOrderLine[] = activeRows.map((row) => {
-      const source = row.selectedProduct!.sources.find((item) => item.id === row.selectedSourceId)!;
-      return {
-        id: `${row.selectedProduct!.id}-${source.id}-${Date.now()}-${row.id}`,
-        productName: row.selectedProduct!.name,
-        contractOrPo: row.selectedProduct!.contractOrPo,
-        origin: source.origin,
-        brand: source.brand,
-        quantity: row.quantity,
-        unit: source.unit || "",
-        unitWeightKg: source.unitWeightKg,
-        totalWeightKg: Number((source.unitWeightKg * row.quantity).toFixed(6)),
-        hsCode: source.hsCode || "",
-        sourceLabel: source.type === "manual" ? `Cơ sở ${source.referenceCode}` : `Số PK ${source.referenceCode}`,
-        notes: source.notes
-      };
-    });
 
     const response = await fetch("/api/packing-orders/export", {
       method: "POST",
@@ -485,18 +794,28 @@ export default function SearchPage() {
           <div className="magic-badge">
             <Zap size={14} /> Nhập thông tin hàng hóa
           </div>
+          <input
+            ref={lookupFileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: "none" }}
+            onChange={handleLookupFileChange}
+          />
           <textarea
             className="search-input-textarea"
-            placeholder={"Nhập hoặc dán danh sách hàng hóa cần tra cứu vào đây...\n\nLưu ý quan trọng: MỖI SẢN PHẨM VUI LÒNG NHẬP TRÊN 1 DÒNG RIÊNG BIỆT.\n\nVí dụ:\nBạc đạn 6023\nBulong M8 20\nMũi khoan 5 li"}
+            placeholder={"Nhập hoặc dán danh sách hàng hóa cần tra cứu vào đây...\n\nMỗi dòng nhập theo cú pháp: Tên hàng hóa || Số lượng\nNếu chỉ nhập tên hàng thì hệ thống tự hiểu số lượng = 1.\n\nVí dụ:\nBạc đạn 6023\nBulong M8 20 || 5\nMũi khoan 5 li || 12"}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
           />
           <div className="search-input-footer">
-            <div className="flex items-center">
-              <button className="attachment-btn" type="button">
-                <Paperclip size={16} className="icon" /> Tệp đính kèm
+            <div className="search-input-actions">
+              <button className="attachment-btn" type="button" onClick={() => lookupFileInputRef.current?.click()}>
+                <Paperclip size={16} className="icon" /> Nhập danh sách từ file excel
               </button>
-              <span className="attachment-info">Hỗ trợ file: .xlsx · .csv</span>
+              <a className="attachment-btn" href="/api/imports/lookup-list/template">
+                <Download size={16} className="icon" /> Tải mẫu file import
+              </a>
+              <span className="attachment-info">Hỗ trợ file: .xlsx, .xls</span>
             </div>
             <button className="analyze-btn" onClick={analyzeInput} disabled={!inputText.trim()}>
               <Zap size={16} /> Tra cứu ngay
@@ -508,6 +827,7 @@ export default function SearchPage() {
   }
 
   const allSelected = mappedRows.length > 0 && mappedRows.every((row) => row.selected);
+  const selectedRowCount = mappedRows.filter((row) => row.selected).length;
   const resolvingRow = mappedRows.find((row) => row.id === resolvingRowId);
   const sortedResolvingCandidates = resolvingRow ? [...resolvingRow.candidates].sort(compareProductSearchItems) : [];
 
@@ -539,6 +859,20 @@ export default function SearchPage() {
             </div>
           </div>
           <div className="flex gap-2">
+            <button className="btn btn-outline" onClick={selectAllRows} disabled={mappedRows.length === 0 || allSelected}>
+              Chọn tất cả
+            </button>
+            <button className="btn btn-outline" onClick={clearRowSelection} disabled={selectedRowCount === 0}>
+              Bỏ chọn
+            </button>
+            <button
+              className="btn btn-outline"
+              onClick={removeSelectedRows}
+              disabled={selectedRowCount === 0}
+              style={{ color: "var(--danger)", borderColor: "#fecaca", backgroundColor: "#fff5f5" }}
+            >
+              <Trash2 size={16} /> Xóa ({selectedRowCount})
+            </button>
             <button className="btn btn-outline" onClick={saveOrder}>
               <Save size={16} /> Lưu phiên
             </button>
@@ -552,23 +886,40 @@ export default function SearchPage() {
         </div>
 
         <div className="table-container">
+          <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", backgroundColor: "#f8fafc" }}>
+            <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--muted)" }}>Hiển thị cột:</span>
+            {searchResultColumnOptions.map((column) => (
+              <label key={column.key} style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.85rem", color: "var(--text)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={visibleSearchColumns[column.key]}
+                  onChange={() => toggleSearchColumn(column.key)}
+                  style={{ cursor: "pointer" }}
+                />
+                <span>{column.label}</span>
+              </label>
+            ))}
+          </div>
           <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1200px" }}>
             <thead style={{ backgroundColor: "#f8fafc", position: "sticky", top: 0, zIndex: 5 }}>
               <tr>
                 <th style={{ width: "40px", textAlign: "center" }}>
                   <input type="checkbox" checked={allSelected} onChange={toggleAllSelection} style={{ cursor: "pointer" }} />
                 </th>
-                <th style={{ width: "40px" }}>STT</th>
-                <th style={{ width: "15%" }}>YÊU CẦU GỐC</th>
-                <th style={{ width: "20%" }}>SẢN PHẨM KHỚP (hệ thống)</th>
-                <th style={{ width: "10%" }}>NGUỒN DỮ LIỆU</th>
-                <th style={{ width: "80px" }}>HS CODE</th>
-                <th style={{ width: "8%" }}>XUẤT XỨ</th>
-                <th style={{ width: "8%" }}>Maker/Brand</th>
-                <th style={{ width: "100px" }}>SỐ LƯỢNG</th>
-                <th style={{ width: "90px", textAlign: "center" }}>Đ.VỊ TÍNH</th>
-                <th style={{ width: "110px", textAlign: "right" }}>N.W / ĐV (KG)</th>
-                <th style={{ width: "160px", textAlign: "right" }}>TRỌNG LƯỢNG N.W (KG)</th>
+                <th style={{ width: "40px", textAlign: "center" }}>STT</th>
+                <th style={{ width: "15%", textAlign: "center" }}>YÊU CẦU GỐC</th>
+                <th style={{ width: "20%", textAlign: "center" }}>SẢN PHẨM KHỚP (hệ thống)</th>
+                {visibleSearchColumns.source && <th style={{ width: "10%", textAlign: "center" }}>NGUỒN DỮ LIỆU</th>}
+                {visibleSearchColumns.hsCode && <th style={{ width: "80px", textAlign: "center" }}>HS CODE</th>}
+                {visibleSearchColumns.origin && <th style={{ width: "8%", textAlign: "center" }}>XUẤT XỨ</th>}
+                {visibleSearchColumns.brand && <th style={{ width: "8%", textAlign: "center" }}>Maker/Brand</th>}
+                {visibleSearchColumns.quantity && <th style={{ width: "100px", textAlign: "center" }}>SỐ LƯỢNG</th>}
+                {visibleSearchColumns.unit && <th style={{ width: "90px", textAlign: "center" }}>Đ.VỊ TÍNH</th>}
+                {visibleSearchColumns.unitWeight && <th style={{ width: "110px", textAlign: "center" }}>N.W / ĐV (KG)</th>}
+                {visibleSearchColumns.totalWeight && <th style={{ width: "160px", textAlign: "center" }}>TRỌNG LƯỢNG N.W (KG)</th>}
+                {visibleSearchColumns.description && <th style={{ width: "14%", textAlign: "center" }}>MÔ TẢ</th>}
+                {visibleSearchColumns.dimensions && <th style={{ width: "10%", textAlign: "center" }}>KÍCH THƯỚC</th>}
+                {visibleSearchColumns.notes && <th style={{ width: "12%", textAlign: "center" }}>GHI CHÚ</th>}
                 <th style={{ width: "50px", textAlign: "center" }}>XÓA</th>
               </tr>
             </thead>
@@ -577,6 +928,10 @@ export default function SearchPage() {
                 const source = row.status === "matched" && row.selectedProduct
                   ? row.selectedProduct.sources.find((item) => item.id === row.selectedSourceId) ?? null
                   : null;
+                const sourceTooltip = source ? getSourceTooltipLabel(source) : undefined;
+                const manualEntry = row.manualEntry ?? createEmptyManualEntry(row.originalText);
+                const quantityDisabled = !row.selected || (!row.useManualEntry && row.status !== "matched");
+                const makerBrandType = row.makerBrandType ?? "maker";
 
                 return (
                   <tr
@@ -590,14 +945,42 @@ export default function SearchPage() {
                     <td style={{ textAlign: "center" }}>
                       <input type="checkbox" checked={row.selected} onChange={() => toggleRowSelection(row.id)} style={{ cursor: "pointer" }} />
                     </td>
-                    <td style={{ fontWeight: 500, color: "var(--muted)" }}>{row.index}</td>
+                    <td style={{ fontWeight: 500, color: "var(--muted)", textAlign: "center" }}>{row.index}</td>
                     <td><span style={{ fontWeight: 500 }}>{row.originalText}</span></td>
                     <td>
+                      {row.useManualEntry && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                          <input
+                            className="form-input"
+                            value={manualEntry.productName}
+                            onChange={(e) => updateManualEntryField(row.id, "productName", e.target.value)}
+                            placeholder="Tên hàng hóa"
+                            disabled={!row.selected}
+                            style={{ minWidth: "220px", padding: "6px 8px", height: "36px" }}
+                          />
+                          {row.selectedProduct ? (
+                            <button className="btn btn-outline" style={{ padding: "4px 10px", fontSize: "0.8rem", width: "fit-content" }} onClick={() => disableManualEntry(row.id)}>
+                              Dùng dữ liệu khớp
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
+                      {!row.useManualEntry && (
+                        <>
                       {row.status === "pending" && <span style={{ color: "var(--muted)" }}>Đang xử lý...</span>}
                       {row.status === "matched" && row.selectedProduct && (
-                        <div className="flex items-center gap-2">
-                          <CheckCircle size={16} style={{ color: "var(--success)" }} />
-                          <div style={{ fontWeight: 600, color: "var(--text)" }}>{row.selectedProduct.name}</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                          <div className="flex items-center gap-2">
+                            <CheckCircle size={16} style={{ color: "var(--success)" }} />
+                            <div style={{ fontWeight: 600, color: "var(--text)" }}>{row.selectedProduct.name}</div>
+                          </div>
+                          <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                            {row.candidates.length > 0 && (
+                              <button className="btn btn-outline" style={{ padding: "4px 10px", fontSize: "0.8rem", width: "fit-content" }} onClick={() => setResolvingRowId(row.id)}>
+                                Chọn lại sản phẩm khớp
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )}
                       {row.status === "ambiguous" && (
@@ -611,47 +994,107 @@ export default function SearchPage() {
                         </div>
                       )}
                       {row.status === "not-found" && (
-                        <div className="flex items-center gap-2">
-                          <AlertCircle size={16} style={{ color: "var(--danger)" }} />
-                          <span style={{ color: "var(--danger)", fontSize: "0.9rem" }}>Không tìm thấy trong hệ thống.</span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start" }}>
+                          <div className="flex items-center gap-2">
+                            <AlertCircle size={16} style={{ color: "var(--danger)" }} />
+                            <span style={{ color: "var(--danger)", fontSize: "0.9rem" }}>Không tìm thấy trong hệ thống.</span>
+                          </div>
+                          <button className="btn btn-outline" style={{ padding: "4px 10px", fontSize: "0.8rem" }} onClick={() => enableManualEntry(row.id)}>
+                            Nhập thủ công
+                          </button>
                         </div>
                       )}
-                    </td>
-                    <td style={{ fontSize: "0.85rem" }}>
-                      {row.status === "matched" && row.selectedProduct ? (
-                        <select
-                          className="form-input"
-                          value={row.selectedSourceId}
-                          onChange={(e) => setMappedRows((prev) => prev.map((item) => item.id === row.id ? { ...item, selectedSourceId: e.target.value } : item))}
-                          style={{ minWidth: "190px", padding: "6px 8px", height: "36px" }}
-                          disabled={!row.selected}
-                        >
-                          {row.selectedProduct.sources
-                            .slice()
-                            .sort((a, b) => getSourcePriority(b) - getSourcePriority(a))
-                            .map((src) => (
-                              <option key={src.id} value={src.id}>
-                                {getSourceDisplayLabel(src)}
-                              </option>
-                            ))}
-                        </select>
-                      ) : (
-                        source ? (source.type === "manual" ? "Thông tin cơ sở" : "Packing List") : "-"
+                        </>
                       )}
                     </td>
-                    <td style={{ fontSize: "0.85rem" }}>{source?.hsCode || "-"}</td>
-                    <td style={{ fontSize: "0.85rem" }}>{source?.origin || "-"}</td>
-                    <td style={{ fontSize: "0.85rem" }}>{source?.brand || "-"}</td>
+                    {visibleSearchColumns.source && (
                     <td>
-                      <div className="flex items-center gap-1" style={{ width: "100px" }}>
-                        <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={() => updateRowQuantity(row.id, row.quantity - 1)} disabled={!row.selected || row.status !== "matched"}>-</button>
-                        <input type="number" value={row.quantity} onChange={(e) => updateRowQuantity(row.id, parseInt(e.target.value, 10) || 1)} className="form-input" style={{ padding: "4px", textAlign: "center", height: "32px" }} disabled={!row.selected || row.status !== "matched"} />
-                        <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={() => updateRowQuantity(row.id, row.quantity + 1)} disabled={!row.selected || row.status !== "matched"}>+</button>
+                      {row.useManualEntry ? (
+                        <span />
+                      ) : row.status === "matched" && row.selectedProduct ? (
+                        <div title={sourceTooltip}>
+                          <select
+                            className="form-input"
+                            value={row.selectedSourceId}
+                            onChange={(e) => setMappedRows((prev) => prev.map((item) => item.id === row.id ? { ...item, selectedSourceId: e.target.value } : item))}
+                            style={{ minWidth: "190px", padding: "6px 8px", height: "36px" }}
+                            disabled={!row.selected}
+                            title={sourceTooltip}
+                          >
+                            {getSearchSelectableSources(row.selectedProduct.sources).map((src) => (
+                              <option key={src.id} value={src.id}>
+                                {getSourceOptionLabel(src)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        <span title={sourceTooltip}>{source ? getSourceShortLabel(source) : "-"}</span>
+                      )}
+                    </td>
+                    )}
+                    {visibleSearchColumns.hsCode && <td style={{ textAlign: "center" }}>{row.useManualEntry ? <input className="form-input" value={manualEntry.hsCode} onChange={(e) => updateManualEntryField(row.id, "hsCode", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "90px" }} /> : source?.hsCode || "-"}</td>}
+                    {visibleSearchColumns.origin && <td style={{ textAlign: "center" }}>{row.useManualEntry ? <input className="form-input" value={manualEntry.origin} onChange={(e) => updateManualEntryField(row.id, "origin", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "90px" }} /> : source?.origin || "-"}</td>}
+                    {visibleSearchColumns.brand && (
+                    <td style={{ textAlign: "center" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "center" }}>
+                        {row.useManualEntry ? (
+                          <input className="form-input" value={manualEntry.brand} onChange={(e) => updateManualEntryField(row.id, "brand", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "100px" }} />
+                        ) : (
+                          <span>{source?.brand || "-"}</span>
+                        )}
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            style={{
+                              padding: "4px 10px",
+                              fontSize: "0.78rem",
+                              border: "1px solid",
+                              borderColor: makerBrandType === "maker" ? "#bfdbfe" : "#e2e8f0",
+                              backgroundColor: makerBrandType === "maker" ? "#dbeafe" : "white",
+                              color: makerBrandType === "maker" ? "#1d4ed8" : "#64748b"
+                            }}
+                            disabled={!row.selected}
+                            onClick={() => updateMakerBrandType(row.id, "maker")}
+                          >
+                            Maker
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            style={{
+                              padding: "4px 10px",
+                              fontSize: "0.78rem",
+                              border: "1px solid",
+                              borderColor: makerBrandType === "brand" ? "#bfdbfe" : "#e2e8f0",
+                              backgroundColor: makerBrandType === "brand" ? "#dbeafe" : "white",
+                              color: makerBrandType === "brand" ? "#1d4ed8" : "#64748b"
+                            }}
+                            disabled={!row.selected}
+                            onClick={() => updateMakerBrandType(row.id, "brand")}
+                          >
+                            Brand
+                          </button>
+                        </div>
                       </div>
                     </td>
-                    <td style={{ textAlign: "center" }}>{source?.unit || "-"}</td>
-                    <td style={{ textAlign: "right" }}>{source?.unitWeightKg ? `${source.unitWeightKg}` : "-"}</td>
-                    <td style={{ textAlign: "right", fontWeight: 600 }}>{source?.unitWeightKg ? `${(source.unitWeightKg * row.quantity).toFixed(2)}` : "-"}</td>
+                    )}
+                    {visibleSearchColumns.quantity && (
+                    <td style={{ textAlign: "center" }}>
+                      <div className="flex items-center gap-1" style={{ width: "100px", margin: "0 auto" }}>
+                        <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={() => updateRowQuantity(row.id, row.quantity - 1)} disabled={quantityDisabled}>-</button>
+                        <input type="number" value={row.quantity} onChange={(e) => updateRowQuantity(row.id, parseInt(e.target.value, 10) || 1)} className="form-input" style={{ padding: "4px", textAlign: "center", height: "32px" }} disabled={quantityDisabled} />
+                        <button className="btn btn-ghost" style={{ padding: "4px 8px" }} onClick={() => updateRowQuantity(row.id, row.quantity + 1)} disabled={quantityDisabled}>+</button>
+                      </div>
+                    </td>
+                    )}
+                    {visibleSearchColumns.unit && <td style={{ textAlign: "center" }}>{row.useManualEntry ? <input className="form-input" value={manualEntry.unit} onChange={(e) => updateManualEntryField(row.id, "unit", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "80px" }} /> : source?.unit || "-"}</td>}
+                    {visibleSearchColumns.unitWeight && <td style={{ textAlign: "right" }}>{row.useManualEntry ? <input className="form-input" type="number" step="0.001" value={manualEntry.unitWeightKg || ""} onChange={(e) => updateManualEntryField(row.id, "unitWeightKg", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "90px" }} /> : source?.unitWeightKg ? `${source.unitWeightKg}` : "-"}</td>}
+                    {visibleSearchColumns.totalWeight && <td style={{ textAlign: "right", fontWeight: 600 }}>{row.useManualEntry ? `${(manualEntry.unitWeightKg * row.quantity).toFixed(2)}` : source?.unitWeightKg ? `${(source.unitWeightKg * row.quantity).toFixed(2)}` : "-"}</td>}
+                    {visibleSearchColumns.description && <td>{row.useManualEntry ? <input className="form-input" value={manualEntry.description} onChange={(e) => updateManualEntryField(row.id, "description", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "120px" }} /> : source?.description || "-"}</td>}
+                    {visibleSearchColumns.dimensions && <td style={{ textAlign: "center" }}>{row.useManualEntry ? <input className="form-input" value={manualEntry.dimensions} onChange={(e) => updateManualEntryField(row.id, "dimensions", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "120px" }} /> : source?.dimensions || "-"}</td>}
+                    {visibleSearchColumns.notes && <td>{row.useManualEntry ? <input className="form-input" value={manualEntry.notes} onChange={(e) => updateManualEntryField(row.id, "notes", e.target.value)} disabled={!row.selected} style={{ padding: "6px 8px", height: "36px", minWidth: "120px" }} /> : source?.notes || "-"}</td>}
                     <td style={{ textAlign: "center" }}>
                       <button className="btn btn-ghost" style={{ color: "var(--danger)", padding: "6px" }} onClick={() => removeRow(row.id)}>
                         <Trash2 size={16} />
@@ -673,44 +1116,82 @@ export default function SearchPage() {
 
       {resolvingRow && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div className="card" style={{ width: "980px", maxHeight: "80vh", display: "flex", flexDirection: "column", backgroundColor: "#f8fafc" }}>
+          <div className="card" style={{ width: "min(1280px, 96vw)", height: "88vh", display: "flex", flexDirection: "column", backgroundColor: "#f8fafc" }}>
             <div className="card-header flex justify-between items-center" style={{ backgroundColor: "white" }}>
-              <h3 className="card-title">Chọn sản phẩm cho: {resolvingRow.originalText}</h3>
+              <div className="flex items-center" style={{ gap: "12px" }}>
+                <h3 className="card-title">Chọn sản phẩm cho: {resolvingRow.originalText}</h3>
+                <button
+                  className="btn btn-outline"
+                  style={{ padding: "8px 16px", fontSize: "0.9rem" }}
+                  onClick={() => {
+                    enableManualEntry(resolvingRow.id);
+                    setResolvingRowId(null);
+                  }}
+                >
+                  Nhập thủ công
+                </button>
+              </div>
               <button className="btn btn-ghost" style={{ padding: "4px" }} onClick={() => setResolvingRowId(null)}><X size={20} /></button>
             </div>
-            <div className="card-body" style={{ display: "flex", flexDirection: "row", overflow: "hidden", padding: 0, flex: 1 }}>
+            <div className="card-body" style={{ display: "flex", flexDirection: "row", overflow: "hidden", padding: 0, flex: 1, minHeight: 0 }}>
               {sortedResolvingCandidates.length === 0 ? (
                 <div style={{ padding: "20px", width: "100%", textAlign: "center" }}><p style={{ color: "var(--muted)" }}>Không có gợi ý nào phù hợp.</p></div>
               ) : (
                 <>
-                  <div style={{ width: "40%", borderRight: "1px solid #e2e8f0", overflowY: "auto", padding: "16px", backgroundColor: "white" }}>
-                    <div className="flex-col gap-3">
-                      {sortedResolvingCandidates.map((cand) => {
+                  <div style={{ width: "36%", borderRight: "1px solid #e2e8f0", overflowY: "auto", backgroundColor: "white" }}>
+                    <div style={{ padding: "16px", borderBottom: "1px solid var(--line)", backgroundColor: "#f8fafc", fontWeight: 600, fontSize: "0.9rem", color: "var(--muted)", position: "sticky", top: 0, zIndex: 5 }}>
+                      DANH MỤC HÀNG HÓA KHỚP ({sortedResolvingCandidates.length})
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      {sortedResolvingCandidates.map((cand, idx) => {
                         const sources = getOrderedSourcesForProduct(cand);
                         const isHovered = hoveredResolveCandId === cand.id;
                         return (
                           <div
                             key={cand.id}
-                            style={{
-                              border: "1px solid",
-                              borderColor: isHovered ? "#6366f1" : "#e2e8f0",
-                              borderRadius: "8px",
-                              padding: "12px",
-                              backgroundColor: isHovered ? "#eef2ff" : "white",
-                              cursor: "pointer",
-                              transition: "all 0.2s",
-                              boxShadow: isHovered ? "0 2px 4px rgba(99, 102, 241, 0.1)" : "0 1px 2px rgba(0,0,0,0.05)"
-                            }}
+                            onClick={() => setHoveredResolveCandId(cand.id)}
                             onMouseEnter={() => setHoveredResolveCandId(cand.id)}
+                            style={{
+                              padding: "16px",
+                              borderBottom: "1px solid var(--line)",
+                              backgroundColor: isHovered ? "#eff6ff" : "white",
+                              borderLeft: isHovered ? "4px solid var(--primary)" : "4px solid transparent",
+                              cursor: "pointer",
+                              transition: "all 0.2s"
+                            }}
                           >
-                            <div style={{ fontWeight: 600, color: isHovered ? "#4338ca" : "var(--text)", fontSize: "1rem", marginBottom: "4px" }}>{cand.name}</div>
-                            <div style={{ fontSize: "0.85rem", color: "#8b5cf6", marginTop: "4px", fontWeight: 500 }}>{sources.length} nguồn dữ liệu</div>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+                              <div style={{ fontWeight: isHovered ? 600 : 500, color: isHovered ? "var(--primary)" : "inherit", flex: 1 }}>
+                                {idx + 1}. {cand.name}
+                              </div>
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px", flexShrink: 0 }}>
+                                <span className="badge" style={{ backgroundColor: isHovered ? "#dbeafe" : "#f1f5f9", color: isHovered ? "#1e40af" : "#64748b" }}>
+                                  {sources.length} nguồn
+                                </span>
+                                <span className="badge" style={{ backgroundColor: "#dcfce7", color: "#166534" }}>
+                                  Khớp {cand.matchScore ?? 0}%
+                                </span>
+                              </div>
+                            </div>
+                            <div style={{ display: "none" }}>
+                              {sources.length} nguồn dữ liệu
+                            </div>
+                            <div style={{ display: "none" }}>
+                              <span className="badge" style={{ backgroundColor: "#dcfce7", color: "#166534" }}>
+                                Khớp {cand.matchScore ?? 0}%
+                              </span>
+                            </div>
+                            {cand.aliases && cand.aliases.length > 0 && (
+                              <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "8px" }}>
+                                Alias: {cand.aliases.join(", ")}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
                   </div>
-                  <div style={{ width: "60%", overflowY: "auto", padding: "20px", backgroundColor: "#f8fafc" }}>
+                  <div style={{ width: "64%", overflowY: "auto", padding: "20px 24px", backgroundColor: "#f8fafc" }}>
                     {hoveredResolveCandId ? (
                       (() => {
                         const cand = sortedResolvingCandidates.find((item) => item.id === hoveredResolveCandId);
@@ -721,27 +1202,40 @@ export default function SearchPage() {
                             <h4 style={{ marginBottom: "16px", fontWeight: 600, color: "var(--text)", fontSize: "1.1rem" }}>
                               Nguồn dữ liệu của: <span style={{ color: "#4f46e5" }}>{cand.name}</span>
                             </h4>
-                            <div className="flex-col gap-3">
+                            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                               {sources.map((src) => (
-                                <div key={src.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px", backgroundColor: "white", border: "1px solid #e2e8f0", borderRadius: "8px", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
-                                  <div style={{ fontSize: "0.9rem", flex: 1 }}>
-                                    <div style={{ marginBottom: "10px" }}>
-                                      <span className="badge" style={{ backgroundColor: src.type === "manual" ? "#e0e7ff" : "#dcfce7", color: src.type === "manual" ? "#3730a3" : "#166534", padding: "4px 8px" }}>
-                                        {src.type === "manual" ? "Cơ sở" : getSourceCustomerName(src) || "Packing List"}
-                                      </span>
-                                    </div>
-                                    <div style={{ color: "var(--muted)", display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px" }}>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>Maker/Brand:</span> <span>{src.brand || "N/A"}</span>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>Xuất xứ:</span> <span>{src.origin || "N/A"}</span>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>N.W/Đv:</span> <span>{src.unitWeightKg || 0}</span>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>HS Code:</span> <span>{src.hsCode || "N/A"}</span>
+                                <div key={src.id} className="card" style={{ border: src.type === "manual" ? "1px solid #c7d2fe" : "1px solid #bbf7d0", boxShadow: "none", margin: 0 }}>
+                                  <div className="card-header flex justify-between items-center" style={{ backgroundColor: src.type === "manual" ? "#e0e7ff" : "#dcfce7", padding: "12px 16px", gap: "16px" }}>
+                                    <h3 className="card-title" style={{ fontSize: "0.9rem", margin: 0, display: "flex", alignItems: "center", gap: "8px", color: src.type === "manual" ? "#3730a3" : "#166534" }}>
+                                      {src.type === "manual" ? <Database size={16} /> : <FileSpreadsheet size={16} />}
+                                      {src.type === "manual" ? "Cơ sở (Thủ công / Excel)" : `${getSourceCustomerName(src) || "Khách hàng chưa có"} • Số PK: ${src.referenceCode || "-"}`}
+                                      {src.type !== "manual" && src.declaredAt && (
+                                        <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#166534", marginLeft: "8px", backgroundColor: "rgba(255,255,255,0.75)", padding: "3px 10px", borderRadius: "999px" }}>
+                                          {new Date(src.declaredAt).toLocaleDateString("vi-VN")}
+                                        </span>
+                                      )}
+                                    </h3>
+                                    <button className="btn btn-primary" style={{ background: "linear-gradient(to right, #6366f1, #3b82f6)", padding: "8px 20px", fontSize: "0.9rem", height: "fit-content", flexShrink: 0 }} onClick={() => selectCandidateForResolvingRow(cand.id, src.id)}>
+                                      Chọn
+                                    </button>
+                                  </div>
+                                  <div className="card-body" style={{ padding: "16px" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", fontSize: "0.9rem" }}>
+                                      <div><span style={{ color: "var(--muted)" }}>Xuất xứ:</span> <strong>{src.origin || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Thương hiệu:</span> <strong>{src.brand || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>HS Code:</span> <strong>{src.hsCode || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Mô tả:</span> <strong>{src.description || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Kích thước:</span> <strong>{src.dimensions || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Trọng lượng:</span> <strong>{src.unitWeightKg || "-"} kg/{src.unit || "đv"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Số lượng:</span> <strong>{src.quantity || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Tổng N.W:</span> <strong>{src.totalWeightKg || "-"} kg</strong></div>
                                     </div>
                                   </div>
-                                  <button className="btn btn-primary" style={{ background: "linear-gradient(to right, #6366f1, #3b82f6)", padding: "8px 20px", fontSize: "0.9rem", height: "fit-content", marginLeft: "16px" }} onClick={() => selectCandidateForResolvingRow(cand.id, src.id)}>
-                                    Chọn
-                                  </button>
                                 </div>
                               ))}
+                              {sources.length === 0 && (
+                                <div style={{ padding: "16px", color: "var(--muted)", textAlign: "center", backgroundColor: "white", borderRadius: "8px", border: "1px solid #e2e8f0" }}>Sản phẩm này chưa có nguồn dữ liệu.</div>
+                              )}
                             </div>
                           </div>
                         );
@@ -761,60 +1255,79 @@ export default function SearchPage() {
           </div>
         </div>
       )}
-
       {showProductPicker && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div className="card" style={{ width: "900px", maxHeight: "85vh", display: "flex", flexDirection: "column", backgroundColor: "#f8fafc" }}>
+          <div className="card" style={{ width: "min(1280px, 96vw)", height: "88vh", display: "flex", flexDirection: "column", backgroundColor: "#f8fafc" }}>
             <div className="card-header" style={{ padding: "16px 20px", backgroundColor: "white" }}>
-              <div className="search-bar">
-                <Search size={18} />
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ fontSize: "1rem", padding: "12px 12px 12px 44px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-                  placeholder="Lọc theo tên, thương hiệu..."
-                  value={productPickerQuery}
-                  onChange={(e) => setProductPickerQuery(e.target.value)}
-                  autoFocus
-                />
+              <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                <div className="search-bar" style={{ flex: 1 }}>
+                  <Search size={18} />
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ fontSize: "1rem", padding: "12px 12px 12px 44px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                    placeholder="Lọc theo tên, thương hiệu..."
+                    value={productPickerQuery}
+                    onChange={(e) => setProductPickerQuery(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <button className="btn btn-outline" style={{ padding: "8px 16px", fontSize: "0.9rem" }} onClick={addManualRowFromPicker}>
+                  <Plus size={16} /> Thêm thủ công
+                </button>
               </div>
             </div>
-            <div className="card-body" style={{ display: "flex", flexDirection: "row", overflow: "hidden", padding: 0, flex: 1 }}>
+            <div className="card-body" style={{ display: "flex", flexDirection: "row", overflow: "hidden", padding: 0, flex: 1, minHeight: 0 }}>
               {isPending ? (
                 <div style={{ padding: "20px", width: "100%", textAlign: "center" }}><p style={{ color: "var(--muted)" }}>Đang tải...</p></div>
               ) : pickerProducts.length === 0 ? (
                 <div style={{ padding: "20px", width: "100%", textAlign: "center" }}><p style={{ color: "var(--muted)" }}>Không tìm thấy sản phẩm.</p></div>
               ) : (
                 <>
-                  <div style={{ width: "40%", borderRight: "1px solid #e2e8f0", overflowY: "auto", padding: "16px", backgroundColor: "white" }}>
-                    <div className="flex-col gap-3">
-                      {pickerProducts.map((cand) => {
+                  <div style={{ width: "36%", borderRight: "1px solid #e2e8f0", overflowY: "auto", backgroundColor: "white" }}>
+                    <div style={{ padding: "16px", borderBottom: "1px solid var(--line)", backgroundColor: "#f8fafc", fontWeight: 600, fontSize: "0.9rem", color: "var(--muted)", position: "sticky", top: 0, zIndex: 5 }}>
+                      DANH MỤC HÀNG HÓA ({pickerProducts.length})
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      {pickerProducts.map((cand, idx) => {
                         const sources = getOrderedSourcesForProduct(cand);
                         const isHovered = hoveredCandId === cand.id;
                         return (
                           <div
                             key={cand.id}
-                            style={{
-                              border: "1px solid",
-                              borderColor: isHovered ? "#6366f1" : "#e2e8f0",
-                              borderRadius: "8px",
-                              padding: "12px",
-                              backgroundColor: isHovered ? "#eef2ff" : "white",
-                              cursor: "pointer",
-                              transition: "all 0.2s",
-                              boxShadow: isHovered ? "0 2px 4px rgba(99, 102, 241, 0.1)" : "0 1px 2px rgba(0,0,0,0.05)"
-                            }}
+                            onClick={() => setHoveredCandId(cand.id)}
                             onMouseEnter={() => setHoveredCandId(cand.id)}
+                            style={{
+                              padding: "16px",
+                              borderBottom: "1px solid var(--line)",
+                              backgroundColor: isHovered ? "#eff6ff" : "white",
+                              borderLeft: isHovered ? "4px solid var(--primary)" : "4px solid transparent",
+                              cursor: "pointer",
+                              transition: "all 0.2s"
+                            }}
                           >
-                            <div style={{ fontWeight: 600, color: isHovered ? "#4338ca" : "var(--text)", fontSize: "1rem", marginBottom: "4px" }}>{cand.name}</div>
-                            <div style={{ fontSize: "0.85rem", color: "var(--muted)" }}>MPN: {cand.contractOrPo || "Không có"}</div>
-                            <div style={{ fontSize: "0.85rem", color: "#8b5cf6", marginTop: "4px", fontWeight: 500 }}>{sources.length} nguồn dữ liệu</div>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+                              <div style={{ fontWeight: isHovered ? 600 : 500, color: isHovered ? "var(--primary)" : "inherit", flex: 1 }}>
+                                {idx + 1}. {cand.name}
+                              </div>
+                              <span className="badge" style={{ backgroundColor: isHovered ? "#dbeafe" : "#f1f5f9", color: isHovered ? "#1e40af" : "#64748b", flexShrink: 0 }}>
+                                {sources.length} nguồn
+                              </span>
+                            </div>
+                            <div style={{ fontSize: "0.85rem", color: "var(--muted)", marginTop: "8px" }}>
+                              MPN: {cand.contractOrPo || "Không có"}
+                            </div>
+                            {cand.aliases && cand.aliases.length > 0 && (
+                              <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "8px" }}>
+                                Alias: {cand.aliases.join(", ")}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
                   </div>
-                  <div style={{ width: "60%", overflowY: "auto", padding: "20px", backgroundColor: "#f8fafc" }}>
+                  <div style={{ width: "64%", overflowY: "auto", padding: "20px 24px", backgroundColor: "#f8fafc" }}>
                     {hoveredCandId ? (
                       (() => {
                         const cand = pickerProducts.find((item) => item.id === hoveredCandId);
@@ -825,25 +1338,35 @@ export default function SearchPage() {
                             <h4 style={{ marginBottom: "16px", fontWeight: 600, color: "var(--text)", fontSize: "1.1rem" }}>
                               Thêm từ nguồn của: <span style={{ color: "#4f46e5" }}>{cand.name}</span>
                             </h4>
-                            <div className="flex-col gap-3">
+                            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                               {sources.map((src) => (
-                                <div key={src.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px", backgroundColor: "white", border: "1px solid #e2e8f0", borderRadius: "8px", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
-                                  <div style={{ fontSize: "0.9rem", flex: 1 }}>
-                                    <div style={{ marginBottom: "10px" }}>
-                                      <span className="badge" style={{ backgroundColor: src.type === "manual" ? "#e0e7ff" : "#dcfce7", color: src.type === "manual" ? "#3730a3" : "#166534", padding: "4px 8px" }}>
-                                        {src.type === "manual" ? "Cơ sở" : "Packing List"}
-                                      </span>
-                                    </div>
-                                    <div style={{ color: "var(--muted)", display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px" }}>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>Maker/Brand:</span> <span>{src.brand || "N/A"}</span>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>Xuất xứ:</span> <span>{src.origin || "N/A"}</span>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>N.W/Đv:</span> <span>{src.unitWeightKg || 0}</span>
-                                      <span style={{ fontWeight: 600, color: "#475569" }}>HS Code:</span> <span>{src.hsCode || "N/A"}</span>
+                                <div key={src.id} className="card" style={{ border: src.type === "manual" ? "1px solid #c7d2fe" : "1px solid #bbf7d0", boxShadow: "none", margin: 0 }}>
+                                  <div className="card-header flex justify-between items-center" style={{ backgroundColor: src.type === "manual" ? "#e0e7ff" : "#dcfce7", padding: "12px 16px", gap: "16px" }}>
+                                    <h3 className="card-title" style={{ fontSize: "0.9rem", margin: 0, display: "flex", alignItems: "center", gap: "8px", color: src.type === "manual" ? "#3730a3" : "#166534" }}>
+                                      {src.type === "manual" ? <Database size={16} /> : <FileSpreadsheet size={16} />}
+                                      {src.type === "manual" ? "Cơ sở (Thủ công / Excel)" : `${getSourceCustomerName(src) || "Khách hàng chưa có"} • Số PK: ${src.referenceCode || "-"}`}
+                                      {src.type !== "manual" && src.declaredAt && (
+                                        <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#166534", marginLeft: "8px", backgroundColor: "rgba(255,255,255,0.75)", padding: "3px 10px", borderRadius: "999px" }}>
+                                          {new Date(src.declaredAt).toLocaleDateString("vi-VN")}
+                                        </span>
+                                      )}
+                                    </h3>
+                                    <button className="btn btn-primary" style={{ background: "linear-gradient(to right, #6366f1, #3b82f6)", padding: "8px 20px", fontSize: "0.9rem", height: "fit-content", flexShrink: 0 }} onClick={() => addProductRowFromPicker(cand, src.id)}>
+                                      + Thêm
+                                    </button>
+                                  </div>
+                                  <div className="card-body" style={{ padding: "16px" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", fontSize: "0.9rem" }}>
+                                      <div><span style={{ color: "var(--muted)" }}>Xuất xứ:</span> <strong>{src.origin || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Thương hiệu:</span> <strong>{src.brand || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>HS Code:</span> <strong>{src.hsCode || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Mô tả:</span> <strong>{src.description || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Kích thước:</span> <strong>{src.dimensions || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Trọng lượng:</span> <strong>{src.unitWeightKg || "-"} kg/{src.unit || "đv"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Số lượng:</span> <strong>{src.quantity || "-"}</strong></div>
+                                      <div><span style={{ color: "var(--muted)" }}>Tổng N.W:</span> <strong>{src.totalWeightKg || "-"} kg</strong></div>
                                     </div>
                                   </div>
-                                  <button className="btn btn-primary" style={{ background: "linear-gradient(to right, #6366f1, #3b82f6)", padding: "8px 20px", fontSize: "0.9rem", height: "fit-content", marginLeft: "16px" }} onClick={() => addProductRowFromPicker(cand, src.id)}>
-                                    +Thêm
-                                  </button>
                                 </div>
                               ))}
                               {sources.length === 0 && (
@@ -874,7 +1397,6 @@ export default function SearchPage() {
           </div>
         </div>
       )}
-
       {showExportForm && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div className="card" style={{ width: "650px", backgroundColor: "white", borderRadius: "12px", overflow: "hidden" }}>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Database, Upload, Lock, Plus, CheckCircle2, AlertCircle, FileSpreadsheet, Edit2, Trash2, Search, X, Zap, Save, List, Key, Unlock, Shield } from "lucide-react";
+import { Database, Upload, Lock, Plus, CheckCircle2, AlertCircle, FileSpreadsheet, Edit2, Trash2, Search, X, Zap, Save, List, Key, Unlock, Shield, Download } from "lucide-react";
 import { ProductRecord } from "@/lib/types";
 
 const MANUAL_INPUT_DELIMITER = "||";
@@ -662,6 +662,15 @@ export default function AdminPage() {
                   <Database size={16} className="icon" style={{ color: '#0284c7' }} /> 
                   Nhập danh sách từ file excel
                 </button>
+
+                <a
+                  className="attachment-btn"
+                  href="/api/imports/base-catalog/template"
+                  style={{ textDecoration: 'none' }}
+                >
+                  <Download size={16} className="icon" style={{ color: '#0284c7' }} />
+                  Tải mẫu file import
+                </a>
 
                 <input 
                   type="file" 
