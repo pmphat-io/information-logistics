@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/encoding-stop.mjs\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit 0 }; & node (Join-Path $root '.codex/hooks/encoding-stop.mjs')\"",
+            "timeout": 30,
+            "statusMessage": "Checking UTF-8/Vietnamese encoding"
+          }
+        ]
+      }
+    ]
+  }
+}

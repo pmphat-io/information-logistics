@@ -1,0 +1,31 @@
+{
+  "name": "information-logistics",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "check:encoding": "node scripts/check-encoding.mjs",
+    "check:encoding:changed": "node scripts/check-encoding.mjs --changed",
+    "check:encoding:staged": "node scripts/check-encoding.mjs --staged"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "lucide-react": "^1.21.0",
+    "mongoose": "8.15.1",
+    "next": "16.2.6",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "prisma": "^6.19.3",
+    "typescript": "5.8.3"
+  }
+}

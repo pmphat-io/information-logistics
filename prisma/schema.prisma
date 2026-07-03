@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id                 String          @id @default(uuid())
+  name               String
+  normalizedName     String          @unique
+  contractOrPo       String?
+  aliases            String?         @db.Text
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  
+  sources            ProductSource[]
+}
+
+model ProductSource {
+  id             String   @id @default(uuid())
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  type           String   // 'manual' | 'customs-declaration'
+  referenceCode  String
+  declaredAt     String?
+  quantity       Float
+  unit           String
+  totalWeightKg  Float
+  unitWeightKg   Float
+  origin         String?
+  brand          String?
+  hsCode         String?
+  description    String?  @db.Text
+  dimensions     String?  @db.Text
+  notes          String?  @db.Text
+  metadata       String?  @db.Text // JSON string for Packing List extra fields (Khách hàng, Địa chỉ...)
+  createdAt      DateTime @default(now())
+}
+
+model ImportBatch {
+  id             String   @id @default(uuid())
+  type           String   // 'packing-list' | 'lookup-list' | 'base-catalog'
+  fileName       String
+  importedAt     String
+  documentCode   String?
+  documentDate   String?
+  rowCount       Int      @default(0)
+  status         String   @default("draft") // 'draft' | 'processed' | 'failed'
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model PackingOrder {
+  id               String             @id @default(uuid())
+  documentNo       String             @unique
+  customerName     String
+  customerAddress  String?
+  customerTaxCode  String?
+  documentDate     String
+  paymentTerm      String?
+  deliveryMethod   String?
+  deliveryWindow   String?
+  packageCount     String?
+  grossWeightKg    String?
+  templateName     String             @default("inv-pkl-template.xls")
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  
+  lines            PackingOrderLine[]
+}
+
+model PackingOrderLine {
+  id             String       @id @default(uuid())
+  packingOrderId String
+  packingOrder   PackingOrder @relation(fields: [packingOrderId], references: [id], onDelete: Cascade)
+  productId      String
+  productName    String
+  contractOrPo   String?
+  origin         String?
+  brand          String?
+  quantity       Float
+  unit           String
+  unitWeightKg   Float
+  totalWeightKg  Float
+  hsCode         String
+  sourceLabel    String
+  notes          String?      @db.Text
+}
+
+model SystemStat {
+  id          String   @id @default("singleton")
+  searchCount Int      @default(0)
+  updatedAt   DateTime @updatedAt
+}

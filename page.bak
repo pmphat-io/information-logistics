@@ -1,0 +1,473 @@
+"use client";
+
+import { useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
+import { Search, Plus, Save, Download, FileSpreadsheet, History, Trash2, Edit2, Database } from "lucide-react";
+import type { PackingOrderDraft, PackingOrderLine, ProductRecord, ProductSource } from "@/lib/types";
+
+type ProductSearchItem = ProductRecord & { matchScore?: number };
+
+type ProductSourcesPayload = {
+  id: string;
+  name: string;
+  contractOrPo?: string;
+  sources: ProductSource[];
+};
+
+type ExportHeader = Pick<
+  PackingOrderDraft,
+  | "documentNo"
+  | "customerName"
+  | "documentDate"
+  | "paymentTerm"
+  | "deliveryMethod"
+  | "deliveryWindow"
+  | "packageCount"
+  | "grossWeightKg"
+>;
+
+const emptyHeader: ExportHeader = {
+  documentNo: "",
+  customerName: "",
+  documentDate: new Date().toISOString().slice(0, 10),
+  paymentTerm: "",
+  deliveryMethod: "",
+  deliveryWindow: "",
+  packageCount: "",
+  grossWeightKg: ""
+};
+
+export default function SearchPage() {
+  const [isPending, startTransition] = useTransition();
+  const [products, setProducts] = useState<ProductSearchItem[]>([]);
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+
+  const [selectedProduct, setSelectedProduct] = useState<ProductSourcesPayload | null>(null);
+  const [selectedSourceId, setSelectedSourceId] = useState<string>("");
+  const [draftQuantity, setDraftQuantity] = useState<string>("1");
+
+  const [orderLines, setOrderLines] = useState<PackingOrderLine[]>([]);
+  const [exportHeader, setExportHeader] = useState<ExportHeader>(emptyHeader);
+  const [activeDraftId, setActiveDraftId] = useState<string>("");
+  
+  const [orders, setOrders] = useState<PackingOrderDraft[]>([]);
+  const [message, setMessage] = useState<string>("");
+  const [error, setError] = useState<string>("");
+
+  const selectedSource = useMemo(
+    () => selectedProduct?.sources.find((item) => item.id === selectedSourceId) ?? null,
+    [selectedProduct, selectedSourceId]
+  );
+
+  useEffect(() => {
+    startTransition(() => {
+      void loadProducts();
+      void loadOrders();
+    });
+  }, []);
+
+  useEffect(() => {
+    const normalized = deferredQuery.trim();
+    startTransition(() => {
+      void loadProducts(normalized || undefined);
+    });
+  }, [deferredQuery]);
+
+  async function loadProducts(text?: string) {
+    const url = text ? `/api/products?q=${encodeURIComponent(text)}` : "/api/products";
+    const response = await fetch(url);
+    if (!response.ok) return;
+    const payload = (await response.json()) as { items: ProductSearchItem[] };
+    setProducts(payload.items);
+  }
+
+  async function loadOrders() {
+    const response = await fetch("/api/packing-orders");
+    if (!response.ok) return;
+    const payload = (await response.json()) as { items: PackingOrderDraft[] };
+    setOrders(payload.items);
+  }
+
+  async function selectProduct(productId: string) {
+    setError("");
+    setMessage("");
+    const response = await fetch(`/api/products/${productId}/sources`);
+    if (!response.ok) {
+      setError("Không tải được nguồn thông tin cho hàng hóa này.");
+      return;
+    }
+    const payload = (await response.json()) as ProductSourcesPayload;
+    setSelectedProduct(payload);
+    setSelectedSourceId(payload.sources[0]?.id ?? "");
+    setDraftQuantity(payload.sources[0]?.quantity ? String(payload.sources[0].quantity) : "1");
+  }
+
+  function addSelectedLine() {
+    if (!selectedProduct || !selectedSource) {
+      setError("Cần chọn hàng hóa và nguồn thông tin trước.");
+      return;
+    }
+    const quantity = Number(draftQuantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setError("Số lượng xuất phải lớn hơn 0.");
+      return;
+    }
+    setError("");
+    const totalWeightKg = Number((selectedSource.unitWeightKg * quantity).toFixed(6));
+
+    setOrderLines((current) => [
+      ...current,
+      {
+        id: `${selectedProduct.id}-${selectedSource.id}-${Date.now()}`,
+        productName: selectedProduct.name,
+        contractOrPo: selectedProduct.contractOrPo,
+        origin: selectedSource.origin,
+        brand: selectedSource.brand,
+        quantity,
+        unit: selectedSource.unit,
+        unitWeightKg: selectedSource.unitWeightKg,
+        totalWeightKg,
+        hsCode: selectedSource.hsCode,
+        sourceLabel: selectedSource.type === "manual"
+          ? `Thông tin cơ sở ${selectedSource.referenceCode}`
+          : `Packing list ${selectedSource.referenceCode}`,
+        notes: selectedSource.notes
+      }
+    ]);
+    setMessage(`Đã thêm ${selectedProduct.name} vào danh sách xuất.`);
+  }
+
+  function removeLine(lineId: string) {
+    setOrderLines((current) => current.filter((line) => line.id !== lineId));
+  }
+
+  async function saveOrder() {
+    if (!orderLines.length) {
+      setError("Chưa có dòng nào trong danh sách xuất.");
+      return;
+    }
+    const response = await fetch(activeDraftId ? `/api/packing-orders/${activeDraftId}` : "/api/packing-orders", {
+      method: activeDraftId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...exportHeader, lines: orderLines })
+    });
+    const payload = (await response.json()) as { error?: string; id?: string };
+    if (!response.ok) {
+      setError(payload.error ?? "Không lưu được phiên làm việc.");
+      return;
+    }
+    setMessage(activeDraftId ? "Đã cập nhật phiên làm việc." : "Đã lưu phiên làm việc.");
+    setActiveDraftId(payload.id ?? activeDraftId);
+    await loadOrders();
+  }
+
+  async function exportDraft(draft: ExportHeader & { lines: PackingOrderLine[] }) {
+    const response = await fetch("/api/packing-orders/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft)
+    });
+    if (!response.ok) {
+      setError("Xuất file packing list thất bại.");
+      return;
+    }
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const fileName = response.headers.get("Content-Disposition")?.match(/filename="(.+)"/)?.[1] ?? "packing-list.xls";
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+    setMessage("Đã xuất file packing list.");
+  }
+
+  function loadSavedDraft(draft: PackingOrderDraft) {
+    setExportHeader({
+      documentNo: draft.documentNo,
+      customerName: draft.customerName,
+      documentDate: draft.documentDate,
+      paymentTerm: draft.paymentTerm,
+      deliveryMethod: draft.deliveryMethod,
+      deliveryWindow: draft.deliveryWindow,
+      packageCount: draft.packageCount,
+      grossWeightKg: draft.grossWeightKg
+    });
+    setOrderLines(draft.lines);
+    setActiveDraftId(draft.id);
+    setMessage(`Đã nạp lại phiên ${draft.documentNo}.`);
+    setError("");
+  }
+
+  function resetDraftEditor() {
+    setExportHeader({ ...emptyHeader, documentDate: new Date().toISOString().slice(0, 10) });
+    setOrderLines([]);
+    setActiveDraftId("");
+    setSelectedProduct(null);
+    setSelectedSourceId("");
+    setDraftQuantity("1");
+    setMessage("Đã tạo phiên packing list mới.");
+    setError("");
+  }
+
+  return (
+    <>
+      <div className="page-header">
+        <div className="page-header-icon">
+          <Search size={20} />
+        </div>
+        <div className="page-header-text">
+          <h2>Tra Cứu Thông Tin Hàng Hóa</h2>
+          <p>Tìm kiếm thông tin gốc và lịch sử khai báo để tạo bảng kê xuất hàng.</p>
+        </div>
+      </div>
+
+      {message && <div className="badge badge-success mb-4 flex gap-2" style={{ width: 'fit-content', padding: '8px 12px' }}><div /> {message}</div>}
+      {error && <div className="badge badge-warn mb-4 flex gap-2" style={{ width: 'fit-content', padding: '8px 12px', backgroundColor: '#fee2e2', color: '#b91c1c' }}><div /> {error}</div>}
+
+      <div className="grid-2">
+        {/* PANEL TRÁI: Tìm kiếm */}
+        <div className="flex-col gap-4">
+          <div className="card">
+            <div className="card-header">
+              <h3 className="card-title flex items-center gap-2">
+                <Search size={16} /> Tìm kiếm hàng hóa
+              </h3>
+            </div>
+            <div className="card-body">
+              <div className="search-bar mb-4">
+                <Search size={16} />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Nhập tên hàng hóa..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+              
+              <div className="table-container" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Tên hàng hóa</th>
+                      <th style={{ width: '100px' }}>Trùng khớp</th>
+                      <th style={{ width: '80px' }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.length === 0 && !isPending && (
+                      <tr>
+                        <td colSpan={3} className="text-center" style={{ color: 'var(--muted)' }}>Không có kết quả</td>
+                      </tr>
+                    )}
+                    {products.map(p => (
+                      <tr key={p.id} className="cursor-pointer" onClick={() => selectProduct(p.id)} style={{ cursor: 'pointer' }}>
+                        <td>
+                          <div style={{ fontWeight: 500, color: 'var(--text)' }}>{p.name}</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+                            {p.declarationHistory.length} lần khai / {p.baseInfo ? 'Có gốc' : 'Không có gốc'}
+                          </div>
+                        </td>
+                        <td>
+                          <span className="badge badge-success">{p.matchScore ?? 100}%</span>
+                        </td>
+                        <td>
+                          <button className="btn btn-ghost" style={{ padding: '6px' }}>Chọn</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* HIỂN THỊ NGUỒN CỦA HÀNG ĐÃ CHỌN */}
+          {selectedProduct && (
+            <div className="card">
+              <div className="card-header">
+                <h3 className="card-title flex items-center gap-2">
+                  <Database size={16} /> {selectedProduct.name}
+                </h3>
+                <span className="badge badge-primary">Chọn nguồn</span>
+              </div>
+              <div className="card-body">
+                <div className="flex-col gap-4">
+                  {selectedProduct.sources.map(source => (
+                    <div 
+                      key={source.id} 
+                      className={`source-card ${selectedSourceId === source.id ? 'selected' : ''}`}
+                      onClick={() => setSelectedSourceId(source.id)}
+                    >
+                      <div className="flex justify-between items-center">
+                        <strong>{source.type === "manual" ? "Thông tin cơ sở" : "Lần khai hải quan"}</strong>
+                        <span className="badge" style={{ backgroundColor: selectedSourceId === source.id ? 'var(--primary)' : '#e2e8f0', color: selectedSourceId === source.id ? 'white' : 'var(--muted)' }}>
+                          {source.referenceCode}
+                        </span>
+                      </div>
+                      
+                      <div className="metric-grid">
+                        <div className="metric-box">
+                          <span>Xuất xứ</span>
+                          <strong>{source.origin || '-'}</strong>
+                        </div>
+                        <div className="metric-box">
+                          <span>Thương hiệu</span>
+                          <strong>{source.brand || '-'}</strong>
+                        </div>
+                        <div className="metric-box">
+                          <span>HS Code</span>
+                          <strong>{source.hsCode || '-'}</strong>
+                        </div>
+                        <div className="metric-box">
+                          <span>S.L Gốc</span>
+                          <strong>{source.quantity} {source.unit}</strong>
+                        </div>
+                        <div className="metric-box">
+                          <span>Tổng N.W</span>
+                          <strong>{source.totalWeightKg} kg</strong>
+                        </div>
+                        <div className="metric-box">
+                          <span>N.W / Đơn vị</span>
+                          <strong>{source.unitWeightKg} kg</strong>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 flex items-center gap-4">
+                  <div className="form-group" style={{ width: '120px' }}>
+                    <label className="form-label">S.Lượng xuất</label>
+                    <input 
+                      type="number" 
+                      className="form-input" 
+                      value={draftQuantity} 
+                      onChange={e => setDraftQuantity(e.target.value)} 
+                      min="1"
+                    />
+                  </div>
+                  <button className="btn btn-primary mt-4" onClick={addSelectedLine}>
+                    <Plus size={16} /> Thêm vào Packing
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* PANEL PHẢI: Draft & Lịch sử */}
+        <div className="flex-col gap-4">
+          <div className="card">
+            <div className="card-header">
+              <h3 className="card-title flex items-center gap-2">
+                <FileSpreadsheet size={16} /> Draft Packing List
+              </h3>
+              <div className="flex gap-2">
+                <span className="badge" style={{ backgroundColor: '#f1f5f9' }}>{activeDraftId ? 'Đang sửa' : 'Tạo mới'}</span>
+                <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: '0.8rem' }} onClick={resetDraftEditor}>
+                  Làm mới
+                </button>
+              </div>
+            </div>
+            
+            <div className="card-body">
+              <div className="grid-3 mb-4">
+                <div className="form-group"><label className="form-label">Số chứng từ</label><input className="form-input" value={exportHeader.documentNo} onChange={e => setExportHeader(c => ({...c, documentNo: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Khách hàng</label><input className="form-input" value={exportHeader.customerName} onChange={e => setExportHeader(c => ({...c, customerName: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Ngày CT</label><input type="date" className="form-input" value={exportHeader.documentDate} onChange={e => setExportHeader(c => ({...c, documentDate: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Thanh toán</label><input className="form-input" value={exportHeader.paymentTerm} onChange={e => setExportHeader(c => ({...c, paymentTerm: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Giao hàng</label><input className="form-input" value={exportHeader.deliveryMethod} onChange={e => setExportHeader(c => ({...c, deliveryMethod: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Hạn giao</label><input className="form-input" value={exportHeader.deliveryWindow} onChange={e => setExportHeader(c => ({...c, deliveryWindow: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">Số kiện</label><input className="form-input" value={exportHeader.packageCount} onChange={e => setExportHeader(c => ({...c, packageCount: e.target.value}))}/></div>
+                <div className="form-group"><label className="form-label">G.W (kg)</label><input className="form-input" value={exportHeader.grossWeightKg} onChange={e => setExportHeader(c => ({...c, grossWeightKg: e.target.value}))}/></div>
+              </div>
+
+              <div className="table-container" style={{ border: '1px solid var(--line)', borderRadius: '8px' }}>
+                <table className="table">
+                  <thead style={{ backgroundColor: '#f8fafc' }}>
+                    <tr>
+                      <th>Hàng hóa</th>
+                      <th>S.Lượng</th>
+                      <th>Đơn vị</th>
+                      <th>Tổng N.W</th>
+                      <th style={{ width: '60px' }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderLines.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="text-center" style={{ color: 'var(--muted)', padding: '24px' }}>Chưa có dữ liệu</td>
+                      </tr>
+                    )}
+                    {orderLines.map(line => (
+                      <tr key={line.id}>
+                        <td>
+                          <strong>{line.productName}</strong>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>HS: {line.hsCode} | {line.brand}</div>
+                        </td>
+                        <td>{line.quantity}</td>
+                        <td>{line.unit}</td>
+                        <td>{line.totalWeightKg}</td>
+                        <td>
+                          <button className="btn btn-ghost" style={{ color: 'var(--danger)', padding: '6px' }} onClick={() => removeLine(line.id)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-4 flex justify-between">
+                <button className="btn btn-outline" onClick={saveOrder}>
+                  <Save size={16} /> Lưu phiên
+                </button>
+                <button className="btn btn-primary" onClick={() => exportDraft({...exportHeader, lines: orderLines})}>
+                  <Download size={16} /> Xuất Excel
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header">
+              <h3 className="card-title flex items-center gap-2">
+                <History size={16} /> Phiên đã lưu
+              </h3>
+            </div>
+            <div className="card-body" style={{ padding: 0 }}>
+              <div className="table-container" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                <table className="table">
+                  <tbody>
+                    {orders.map(draft => (
+                      <tr key={draft.id}>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{draft.documentNo || 'No Document'}</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{draft.customerName} - {draft.documentDate}</div>
+                        </td>
+                        <td><span className="badge badge-warn">{draft.lines.length} dòng</span></td>
+                        <td>
+                          <div className="flex gap-2">
+                            <button className="btn btn-ghost" style={{ padding: '6px' }} onClick={() => loadSavedDraft(draft)} title="Sửa">
+                              <Edit2 size={14} />
+                            </button>
+                            <button className="btn btn-ghost" style={{ padding: '6px', color: 'var(--primary)' }} onClick={() => exportDraft({...draft})} title="Xuất Excel">
+                              <Download size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
